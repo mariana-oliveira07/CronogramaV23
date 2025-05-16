@@ -1,5 +1,6 @@
+// ignore_for_file: use_build_context_synchronously, library_private_types_in_public_api, avoid_print
+
 import 'package:cronograma/data/models/aula_model.dart';
-import 'package:cronograma/pdf/pdf_generator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
@@ -264,6 +265,29 @@ class _CronogramaPageState extends State<CronogramaPage> {
   Future<void> _imprimirCronogramaWindows() async {
     final pdf = pw.Document();
 
+    // Carrega os dados da turma selecionada
+    final turmaInfo = _selectedTurmaId != null
+        ? _turmas.firstWhere((t) => t['idTurma'] == _selectedTurmaId)
+        : null;
+
+    String nomeCurso = 'Não especificado';
+    if (turmaInfo != null && turmaInfo['idCurso'] != null) {
+      try {
+        final db = await DatabaseHelper.instance.database;
+        final curso = await db.query(
+          'Cursos',
+          where: 'idCurso = ?',
+          whereArgs: [turmaInfo['idCurso']],
+          limit: 1,
+        );
+        if (curso.isNotEmpty) {
+          nomeCurso = curso.first['nome_curso'] as String;
+        }
+      } catch (e) {
+        print('Erro ao buscar curso: $e');
+      }
+    }
+
     // Carrega todos os dados necessários antes de construir o PDF
     final List<Future> futures = [];
     final Map<DateTime, List<Map<String, dynamic>>> aulasComDetalhes = {};
@@ -278,49 +302,113 @@ class _CronogramaPageState extends State<CronogramaPage> {
 
     await Future.wait(futures);
 
+    // Agrupa aulas por UC
+    final Map<String, List<Map<String, dynamic>>> aulasPorUc = {};
+    for (var entry in aulasComDetalhes.entries) {
+      for (var aula in entry.value) {
+        final uc = aula['nome_uc'] as String;
+        aulasPorUc.putIfAbsent(uc, () => []).add(aula);
+      }
+    }
+
+    // Determina os dias da semana com aulas
+    final diasComAulas = <int>{};
+    for (var data in aulasComDetalhes.keys) {
+      diasComAulas.add(data.weekday);
+    }
+
+    // Formata o período baseado nos dias com aula
+    final periodoFormatado = _formatarPeriodo(diasComAulas.toList());
+
+    // Cores básicas para cada UC
+    final ucColors = <String, PdfColor>{};
+    final basicColors = [
+      PdfColors.green,
+      PdfColors.orange,
+      PdfColors.purple,
+      PdfColors.yellow,
+      PdfColors.teal,
+      PdfColors.pink,
+    ];
+
+    int colorIndex = 0;
+    for (var uc in aulasPorUc.keys) {
+      ucColors[uc] = basicColors[colorIndex % basicColors.length];
+      colorIndex++;
+    }
+
     pdf.addPage(
       pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
         build: (pw.Context context) {
           return [
-            pw.Header(
-              level: 0,
-              child: pw.Text('Cronograma de Aulas',
-                  style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+            // Cabeçalho
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Center(
+                  child: pw.Text('SENAC CATALÃO',
+                      style: pw.TextStyle(
+                          fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                ),
+                pw.SizedBox(height: 10),
+                pw.Row(
+                  children: [
+                    pw.Text('CURSO: ',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    pw.Text(nomeCurso),
+                  ],
+                ),
+                pw.Row(
+                  children: [
+                    pw.Text('TURMA: ',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    pw.Text(turmaInfo?['turma'] ?? 'Todas as Turmas'),
+                  ],
+                ),
+                pw.Row(
+                  children: [
+                    pw.Text('PERÍODO: ',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    pw.Text(periodoFormatado),
+                  ],
+                ),
+                pw.Row(
+                  children: [
+                    pw.Text('HORÁRIO: ',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    pw.Text(turmaInfo?['horario'] ?? ''),
+                  ],
+                ),
+                pw.SizedBox(height: 20),
+                pw.Center(
+                  child: pw.Text('CRONOGRAMA DE AULAS - ${DateTime.now().year}',
+                      style: pw.TextStyle(
+                          fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                ),
+                pw.SizedBox(height: 20),
+
+                // LEGENDA
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildLegendaItem(
+                        'F', 'Feriado', PdfColors.red100, PdfColors.red),
+                    _buildLegendaItem('FDS', 'Fim de semana', PdfColors.red100,
+                        PdfColors.red),
+                    _buildLegendaItem('Xh', 'Aula (horas)', PdfColors.blue100,
+                        PdfColors.blue900),
+                    _buildLegendaItem(
+                        '', 'Dia sem aula', PdfColors.grey200, PdfColors.black),
+                  ],
+                ),
+                pw.SizedBox(height: 20),
+              ],
             ),
-            pw.SizedBox(height: 20),
-            for (var entry in aulasComDetalhes.entries)
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text(
-                    DateFormat('EEEE, dd/MM/yyyy', 'pt_BR').format(entry.key),
-                    style: pw.TextStyle(
-                        fontSize: 16, fontWeight: pw.FontWeight.bold),
-                  ),
-                  pw.SizedBox(height: 10),
-                  if (entry.value.isEmpty)
-                    pw.Text('Nenhuma aula agendada neste dia'),
-                  ...entry.value.map((detalhes) {
-                    return pw.Padding(
-                      padding: const pw.EdgeInsets.only(bottom: 8),
-                      child: pw.Column(
-                        crossAxisAlignment: pw.CrossAxisAlignment.start,
-                        children: [
-                          pw.Text(
-                            'UC: ${detalhes['nome_uc']} - Turma: ${detalhes['turma']}',
-                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                          ),
-                          pw.Text('Instrutor: ${detalhes['nome_instrutor']}'),
-                          pw.Text('Horário: ${detalhes['horario']}'),
-                          pw.Text('Status: ${detalhes['status']}'),
-                          pw.Text('Carga horária: ${detalhes['horas']} horas'),
-                          pw.Divider(),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                ],
-              ),
+
+            // Tabela de meses
+            for (var mes in _getMesesComAulas(aulasComDetalhes))
+              _buildTabelaMes(mes, aulasPorUc, ucColors),
           ];
         },
       ),
@@ -329,6 +417,257 @@ class _CronogramaPageState extends State<CronogramaPage> {
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
       usePrinterSettings: true,
+    );
+  }
+
+  pw.Widget _buildLegendaItem(
+      String simbolo, String descricao, PdfColor corFundo, PdfColor corTexto) {
+    return pw.Row(
+      children: [
+        pw.Container(
+          width: 20,
+          height: 20,
+          decoration: pw.BoxDecoration(
+            color: corFundo,
+            border: pw.Border.all(),
+          ),
+          child: pw.Center(
+            child: pw.Text(
+              simbolo,
+              style: pw.TextStyle(
+                fontSize: 8,
+                fontWeight: pw.FontWeight.bold,
+                color: corTexto,
+              ),
+            ),
+          ),
+        ),
+        pw.SizedBox(width: 5),
+        pw.Text(
+          descricao,
+          style: const pw.TextStyle(fontSize: 10),
+        ),
+        pw.SizedBox(width: 10),
+      ],
+    );
+  }
+
+  String _formatarPeriodo(List<int> diasDaSemana) {
+    if (diasDaSemana.isEmpty) return 'Nenhuma aula marcada';
+
+    diasDaSemana.sort();
+
+    // Mapeia números dos dias para abreviações
+    final diasMap = {
+      1: 'Seg',
+      2: 'Ter',
+      3: 'Qua',
+      4: 'Qui',
+      5: 'Sex',
+      6: 'Sáb',
+      7: 'Dom',
+    };
+
+    // Se tiver todos os dias úteis (segunda a sexta)
+    if (diasDaSemana.contains(1) &&
+        diasDaSemana.contains(2) &&
+        diasDaSemana.contains(3) &&
+        diasDaSemana.contains(4) &&
+        diasDaSemana.contains(5)) {
+      return 'Segunda a Sexta';
+    }
+
+    // Se tiver todos os dias da semana
+    if (diasDaSemana.contains(1) &&
+        diasDaSemana.contains(2) &&
+        diasDaSemana.contains(3) &&
+        diasDaSemana.contains(4) &&
+        diasDaSemana.contains(5) &&
+        diasDaSemana.contains(6) &&
+        diasDaSemana.contains(7)) {
+      return 'Todos os dias';
+    }
+
+    // Caso contrário, lista os dias específicos
+    return diasDaSemana.map((dia) => diasMap[dia]).join(', ');
+  }
+
+  List<DateTime> _getMesesComAulas(
+      Map<DateTime, List<Map<String, dynamic>>> aulasComDetalhes) {
+    final Set<DateTime> meses = {};
+    for (var data in aulasComDetalhes.keys) {
+      meses.add(DateTime(data.year, data.month, 1));
+    }
+    final mesesList = meses.toList();
+    mesesList.sort((a, b) => a.compareTo(b));
+    return mesesList;
+  }
+
+  pw.Widget _buildTabelaMes(
+      DateTime mes,
+      Map<String, List<Map<String, dynamic>>> aulasPorUc,
+      Map<String, PdfColor> ucColors) {
+    final nomeMes = DateFormat('MMMM', 'pt_BR').format(mes);
+    final diasNoMes = DateTime(mes.year, mes.month + 1, 0).day;
+    final dias = <DateTime>[];
+    for (var i = 1; i <= diasNoMes; i++) {
+      dias.add(DateTime(mes.year, mes.month, i));
+    }
+
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(nomeMes,
+            style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 5),
+        // Tabela principal
+        pw.Table(
+          border: pw.TableBorder.all(),
+          columnWidths: {
+            0: const pw.FixedColumnWidth(150),
+            ...{
+              for (var i in List.generate(diasNoMes, (i) => i + 1))
+                i: const pw.FixedColumnWidth(25)
+            },
+          },
+          children: [
+            // Linha com nomes completos dos dias da semana
+            pw.TableRow(
+              children: [
+                pw.Container(),
+                for (var dia in dias)
+                  pw.Container(
+                    color: _isFeriado(dia) ? PdfColors.red100 : null,
+                    child: pw.Center(
+                      child: pw.Text(
+                        DateFormat('E', 'pt_BR').format(dia).substring(0, 3),
+                        style: pw.TextStyle(
+                          fontSize: 8,
+                          fontWeight: pw.FontWeight.bold,
+                          color: _isFeriado(dia) ? PdfColors.red : null,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            // Linha com números dos dias
+            pw.TableRow(
+              children: [
+                pw.Container(),
+                for (var dia in dias)
+                  pw.Container(
+                    color: _isFeriado(dia) ? PdfColors.red100 : null,
+                    child: pw.Center(
+                      child: pw.Text(
+                        '${dia.day}',
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          color: _isFeriado(dia) ? PdfColors.red : null,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            // Linhas para cada UC
+            for (var uc in aulasPorUc.keys)
+              pw.TableRow(
+                children: [
+                  pw.Container(
+                    color: ucColors[uc],
+                    child: pw.Padding(
+                      padding: const pw.EdgeInsets.all(4),
+                      child: pw.Text(
+                        uc,
+                        style: const pw.TextStyle(
+                          fontSize: 10,
+                          color: PdfColors.black,
+                        ),
+                      ),
+                    ),
+                  ),
+                  for (var dia in dias)
+                    _getCelulaDia(uc, dia, aulasPorUc, ucColors),
+                ],
+              ),
+          ],
+        ),
+        pw.SizedBox(height: 20),
+      ],
+    );
+  }
+
+  pw.Widget _getCelulaDia(
+      String uc,
+      DateTime dia,
+      Map<String, List<Map<String, dynamic>>> aulasPorUc,
+      Map<String, PdfColor> ucColors) {
+    // Verifica se é fim de semana (sábado=6, domingo=7) ou feriado
+    final isFimDeSemanaOuFeriado =
+        dia.weekday == 6 || dia.weekday == 7 || _isFeriado(dia);
+
+    if (isFimDeSemanaOuFeriado) {
+      return pw.Container(
+        height: 20,
+        decoration: pw.BoxDecoration(
+          color: PdfColors.red100,
+          border: pw.Border.all(),
+        ),
+        child: pw.Center(
+          child: pw.Text(
+            dia.weekday == 6 || dia.weekday == 7
+                ? 'FDS'
+                : 'F', // FDS para fim de semana, F para feriado
+            style: pw.TextStyle(
+              fontSize: 8,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.red,
+            ),
+          ),
+        ),
+      );
+    }
+
+    final aulasDesteDia = aulasPorUc[uc]?.where((aula) {
+      final aulaDate = DateTime.parse(aula['data']);
+      return aulaDate.year == dia.year &&
+          aulaDate.month == dia.month &&
+          aulaDate.day == dia.day;
+    }).toList();
+
+    if (aulasDesteDia == null || aulasDesteDia.isEmpty) {
+      return pw.Container(
+        height: 20,
+        decoration: pw.BoxDecoration(
+          color: PdfColors.grey200,
+          border: pw.Border.all(),
+        ),
+        child: pw.SizedBox(),
+      );
+    }
+
+    // Soma as horas de todas as aulas deste dia para esta UC
+    final totalHoras = aulasDesteDia.fold<int>(0, (sum, aula) {
+      return sum + (aula['horas'] as int? ?? 0);
+    });
+
+    return pw.Container(
+      height: 20,
+      decoration: pw.BoxDecoration(
+        color: PdfColors.blue100,
+        border: pw.Border.all(),
+      ),
+      child: pw.Center(
+        child: pw.Text(
+          '${totalHoras}h',
+          style: pw.TextStyle(
+            fontSize: 8,
+            fontWeight: pw.FontWeight.bold,
+            color: PdfColors.blue900,
+          ),
+        ),
+      ),
     );
   }
 
@@ -577,32 +916,6 @@ class _CronogramaPageState extends State<CronogramaPage> {
         title: const Text('Cronograma de Aulas'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.picture_as_pdf),
-            onPressed: () async {
-              final pdfGen = PDFGenerator();
-                          // Prepara os dados no formato esperado
-            final Map<DateTime, List<Map<String, dynamic>>> aulasData = {};
-            
-            for (var entry in _filteredEvents.entries) {
-              for (var aula in entry.value) {
-                final detalhes = await _getAulaDetails(aula.idAula!);
-                aulasData.putIfAbsent(
-                  DateTime(aula.data.year, aula.data.month, aula.data.day),
-                  () => [],
-                ).add(detalhes);
-              }
-            }
-            
-        //    await pdfGen.generatePDF(context 
-            //'Técnico em Enfermagem', // Nome do curso
-      //turmaInfo['turma'] as String,
-      //turmaInfo['periodo'] as String,
-      //turmaInfo['horario'] as String,
-      //aulasData,
-     // );
-            },
-          ),
-          IconButton(
             icon: const Icon(Icons.print),
             onPressed: _imprimirCronogramaWindows,
           ),
@@ -674,7 +987,7 @@ class _CronogramaPageState extends State<CronogramaPage> {
                           value: turma['idTurma'] as int,
                           child: Text(turma['turma'] as String),
                         );
-                      }).toList(),
+                      }),
                     ],
                     onChanged: (value) {
                       setState(() {
@@ -684,7 +997,6 @@ class _CronogramaPageState extends State<CronogramaPage> {
                     },
                   ),
                 ),
-
                 TableCalendar(
                   firstDay: DateTime.utc(2020, 1, 1),
                   lastDay: DateTime.utc(2030, 12, 31),
