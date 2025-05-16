@@ -1,4 +1,5 @@
 import 'package:cronograma/data/models/aula_model.dart';
+import 'package:cronograma/pdf/pdf_generator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
@@ -8,7 +9,6 @@ import 'package:cronograma/core/database_helper.dart';
 import 'package:printing/printing.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:cronograma/presentation/pages/Cronograma/agendar_aulas_page.dart';
-// Make sure the file agendar_aulas_page.dart exists and contains a class named AgendarAulasPage.
 
 class CronogramaPage extends StatefulWidget {
   const CronogramaPage({super.key});
@@ -264,30 +264,61 @@ class _CronogramaPageState extends State<CronogramaPage> {
   Future<void> _imprimirCronogramaWindows() async {
     final pdf = pw.Document();
 
+    // Carrega todos os dados necessários antes de construir o PDF
+    final List<Future> futures = [];
+    final Map<DateTime, List<Map<String, dynamic>>> aulasComDetalhes = {};
+
+    for (var entry in _filteredEvents.entries) {
+      for (var aula in entry.value) {
+        futures.add(_getAulaDetails(aula.idAula!).then((detalhes) {
+          aulasComDetalhes.putIfAbsent(entry.key, () => []).add(detalhes);
+        }));
+      }
+    }
+
+    await Future.wait(futures);
+
     pdf.addPage(
       pw.MultiPage(
         build: (pw.Context context) {
           return [
-            pw.Text('Cronograma de Aulas', style: pw.TextStyle(fontSize: 20)),
+            pw.Header(
+              level: 0,
+              child: pw.Text('Cronograma de Aulas',
+                  style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+            ),
             pw.SizedBox(height: 20),
-            for (var entry in _filteredEvents.entries)
+            for (var entry in aulasComDetalhes.entries)
               pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   pw.Text(
                     DateFormat('EEEE, dd/MM/yyyy', 'pt_BR').format(entry.key),
                     style: pw.TextStyle(
-                        fontSize: 14, fontWeight: pw.FontWeight.bold),
-                  ),
-                  pw.SizedBox(height: 5),
-                  if (entry.value.isEmpty) pw.Text('Nenhuma aula'),
-                  ...entry.value.map(
-                    (aula) => pw.Bullet(
-                      text:
-                          'UC: ${aula.idUc}, Horário: ${aula.horario}, Status: ${aula.status}, Carga: ${aula.horas}h',
-                    ),
+                        fontSize: 16, fontWeight: pw.FontWeight.bold),
                   ),
                   pw.SizedBox(height: 10),
+                  if (entry.value.isEmpty)
+                    pw.Text('Nenhuma aula agendada neste dia'),
+                  ...entry.value.map((detalhes) {
+                    return pw.Padding(
+                      padding: const pw.EdgeInsets.only(bottom: 8),
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          pw.Text(
+                            'UC: ${detalhes['nome_uc']} - Turma: ${detalhes['turma']}',
+                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                          ),
+                          pw.Text('Instrutor: ${detalhes['nome_instrutor']}'),
+                          pw.Text('Horário: ${detalhes['horario']}'),
+                          pw.Text('Status: ${detalhes['status']}'),
+                          pw.Text('Carga horária: ${detalhes['horas']} horas'),
+                          pw.Divider(),
+                        ],
+                      ),
+                    );
+                  }).toList(),
                 ],
               ),
           ];
@@ -295,7 +326,6 @@ class _CronogramaPageState extends State<CronogramaPage> {
       ),
     );
 
-    // Visualiza e envia para impressão no Windows
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
       usePrinterSettings: true,
@@ -518,7 +548,10 @@ class _CronogramaPageState extends State<CronogramaPage> {
         return {
           'nome_uc': 'Não encontrado',
           'turma': 'Não encontrada',
-          'nome_instrutor': 'Não encontrado'
+          'nome_instrutor': 'Não encontrado',
+          'horario': '',
+          'status': '',
+          'horas': 0
         };
       }
 
@@ -527,7 +560,10 @@ class _CronogramaPageState extends State<CronogramaPage> {
       return {
         'nome_uc': 'Erro: $e',
         'turma': 'Erro: $e',
-        'nome_instrutor': 'Erro: $e'
+        'nome_instrutor': 'Erro: $e',
+        'horario': '',
+        'status': '',
+        'horas': 0
       };
     }
   }
@@ -540,6 +576,32 @@ class _CronogramaPageState extends State<CronogramaPage> {
       appBar: AppBar(
         title: const Text('Cronograma de Aulas'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf),
+            onPressed: () async {
+              final pdfGen = PDFGenerator();
+                          // Prepara os dados no formato esperado
+            final Map<DateTime, List<Map<String, dynamic>>> aulasData = {};
+            
+            for (var entry in _filteredEvents.entries) {
+              for (var aula in entry.value) {
+                final detalhes = await _getAulaDetails(aula.idAula!);
+                aulasData.putIfAbsent(
+                  DateTime(aula.data.year, aula.data.month, aula.data.day),
+                  () => [],
+                ).add(detalhes);
+              }
+            }
+            
+        //    await pdfGen.generatePDF(context 
+            //'Técnico em Enfermagem', // Nome do curso
+      //turmaInfo['turma'] as String,
+      //turmaInfo['periodo'] as String,
+      //turmaInfo['horario'] as String,
+      //aulasData,
+     // );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.print),
             onPressed: _imprimirCronogramaWindows,
@@ -587,7 +649,6 @@ class _CronogramaPageState extends State<CronogramaPage> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // Filtro por Turma
                 Padding(
                   padding: const EdgeInsets.all(12.0),
                   child: DropdownButtonFormField<int>(
