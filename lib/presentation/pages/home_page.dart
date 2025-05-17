@@ -108,19 +108,19 @@ class _HomePageState extends State<HomePage> {
             title: 'Turmas',
             destination: const TurmaPageForm(),
           ),
-          const Divider(),
-          _buildDrawerItem(
-            context,
-            icon: Icons.settings,
-            title: 'Configurações',
-            destination: Container(), // Substitua pela página de configurações
-          ),
-          _buildDrawerItem(
-            context,
-            icon: Icons.exit_to_app,
-            title: 'Sair',
-            destination: Container(), // Lógica de logout
-          ),
+          // const Divider(),
+          // _buildDrawerItem(
+          //   context,
+          //   icon: Icons.settings,
+          //   title: 'Configurações',
+          //   destination: Container(), // Substitua pela página de configurações
+          // ),
+          // _buildDrawerItem(
+          //   context,
+          //   icon: Icons.exit_to_app,
+          //   title: 'Sair',
+          //   destination: Container(), // Lógica de logout
+          // ),
         ],
       ),
     );
