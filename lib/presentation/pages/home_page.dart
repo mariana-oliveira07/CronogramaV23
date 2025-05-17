@@ -60,13 +60,6 @@ class _HomePageState extends State<HomePage> {
         ),
         child: _pages[_selectedIndex],
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.tealAccent[700],
-        child: const Icon(Icons.add),
-        onPressed: () {
-          // Ação para adicionar novo item
-        },
-      ),
     );
   }
 
